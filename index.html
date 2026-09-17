@@ -1694,10 +1694,31 @@ function resize(){
   });
   const rl=$('#roamLine'); if(rl) rl.style.top=roamMinY()+'px';
 }
-window.addEventListener('resize',()=>{
+/* Re-measure whenever the playfield's box changes, not only on a window
+   resize event. A page whose first layout happens at zero size — a background
+   tab, an embedded pane, a restored mobile tab — would otherwise measure 0 and
+   never recover. This also covers phone rotation and the mobile address bar
+   collapsing as you scroll. */
+function relayout(){
+  const before=W;
   resize();
-  if(G.running){ layoutLanes(); G.shipY=clamp(G.shipY,roamMinY(),roamMaxY()); }
-});
+  if(!W||!H) return;                    // still unmeasurable; wait for the next call
+  if(G.running){
+    layoutLanes();
+    if(!before){ G.shipX=W/2; G.shipY=roamMaxY(); G.shipV=0; G.shipVY=0; }
+    G.shipX=clamp(G.shipX,20,W-20);
+    G.shipY=clamp(G.shipY,roamMinY(),roamMaxY());
+  }
+}
+window.addEventListener('resize',relayout);
+window.addEventListener('orientationchange',()=>setTimeout(relayout,120));
+try{
+  new ResizeObserver(relayout).observe(field);
+}catch(e){
+  // no ResizeObserver: fall back to a short poll until the field has a size
+  let tries=0;
+  const t=setInterval(()=>{ relayout(); if((W&&H)||++tries>40) clearInterval(t); },150);
+}
 
 const G={
   running:false, paused:false, over:false, mode:'play',
@@ -1843,12 +1864,21 @@ function startGame(pool,label,mode){
   goto('s-game');
   document.body.classList.toggle('touch', matchMedia('(pointer:coarse)').matches);
   requestAnimationFrame(()=>{
-    resize(); G.shipX=W/2; G.shipV=0; G.shipY=roamMaxY(); G.shipVY=0; G.cooldown=0;
+    resize();
+    if(!W||!H){                       // field not laid out yet — try again next frame
+      let n=0;
+      const wait=()=>{ resize(); if((W&&H)||++n>60) begin(); else requestAnimationFrame(wait); };
+      return wait();
+    }
+    begin();
+  });
+  function begin(){
+    G.shipX=W/2; G.shipV=0; G.shipY=roamMaxY(); G.shipVY=0; G.cooldown=0;
     nextPrompt(); drawHUD();
     G.running=true; G.lastT=performance.now();
     cancelAnimationFrame(G.raf); G.raf=requestAnimationFrame(loop);
     Audio_.start();
-  });
+  }
 }
 function endGame(){
   G.running=false; G.over=true; cancelAnimationFrame(G.raf);
